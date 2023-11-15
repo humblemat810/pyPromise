@@ -2,6 +2,7 @@
 from thennable_thread import thennable_thread, await_start_next
 from typing import Union, List
 from threading import Thread
+
 class Deferred(thennable_thread):
     def __init__(self, *args, target = None, **kwargs):
         self.th=self
@@ -11,15 +12,16 @@ class Deferred(thennable_thread):
         super().__init__( *args, target=target,**kwargs)
         
 class Promise ():
-    def __init__(self, *args, **kwargs):
+    def __init__(self, f_of_resolve_reject,  *args, **kwargs):
         if len(args) > 0:
-            if issubclass(type(args[0]), thennable_thread):
-                th = args[0]
+            if issubclass(type(f_of_resolve_reject), thennable_thread):
+                th = f_of_resolve_reject
             else:
-                if callable(args[0]):
-                    th = thennable_thread(target = args[0], args = args[1:], kwargs = kwargs)
+                if callable(f_of_resolve_reject):
+                    th = thennable_thread(target = f_of_resolve_reject, args = args, kwargs = kwargs)
                 else:
-                    th = thennable_thread(*args, **kwargs)
+                    raise(ValueError("f_of_resolve_reject has to be thread or callable" ))
+                    
             self.th = th
         else:
             self.th = thennable_thread( *args, **kwargs)
