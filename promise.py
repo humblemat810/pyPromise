@@ -1,26 +1,23 @@
 
-from thennable_thread import thennable_thread, await_start_next
+from thennable_thread import thennable_thread
 from typing import Union, List
 from threading import Thread
-
-class Deferred(thennable_thread):
-    def __init__(self, *args, target = None, **kwargs):
-        self.th=self
-        self.auto_fire = False
-        if target is None:
-            target = args[0]
-            args = args[1:]
-        super().__init__( *args, target=target,**kwargs)
-        if self.th._started.is_set():
+def await_start_next(last_th: "ThreadWithReturnValue", next_th: "ThreadWithReturnValue"):
+    if last_th is not None:
+        last_th.end_event.wait()
+    if last_th.error_event.is_set():
+        pass
+    else:
+        if last_th is not None:
+            next_th._args = [last_th._return] + next_th._args
+        else:
+            #may behave insert none here
+            # nothing indicate it has no result no parent
+            pass
+        if next_th._started.is_set():
             pass
         else:
-            if self.auto_fire:
-                if self.th.parent is not None:
-                    wsn_th = Thread(target= await_start_next, args = [self.th.parent, self.th])
-                    wsn_th.start()
-                else:
-                    self.th.start()
-
+            next_th.start()
 class Promise ():
     auto_fire = True
     def resolve(self, value):
@@ -36,7 +33,7 @@ class Promise ():
                 th = f_of_resolve_reject
             else:
                 if callable(f_of_resolve_reject):
-                    th = thennable_thread(target = f_of_resolve_reject, args = (self.resolve, self.reject), kwargs = kwargs)
+                    th = thennable_thread(target = f_of_resolve_reject, is_promise = True, args = (self.resolve, self.reject), kwargs = kwargs)
                     
                     
                 else:
@@ -44,7 +41,8 @@ class Promise ():
                     
             self.th = th
         else:
-            self.th = thennable_thread( *args, **kwargs)
+            self.th = thennable_thread( *args, is_promise = True, **kwargs)
+            self.th.is_promise = True
         if self.auto_fire:
             self.fire()
         self.promise_resolved = self.th.end_event
@@ -58,27 +56,38 @@ class Promise ():
                 wsn_th.start()
             else:
                 self.th.start()
+    def then(self, *args, **kwargs):
+        return Promise(self.th.then(*args, **kwargs))
+        
     def done(self, *args, **kwargs):
         return Promise(self.th.done(*args, **kwargs))
             # internal thread reference
-class Deferred2(Promise):
+class Deferred(Promise):
     auto_fire = False
-from threading import Event
-def when(ls_of_callable_or_promise: List[Union[callable, "thennable_thread" ]]):
-    
-    def callback(resolve: callable, reject: callable):
-        try:
-            promises = []
-            for i in ls_of_callable_or_promise:
-                if not issubclass(type(i), thennable_thread):
-                    i = Promise(i)
-                promises.append(i)
 
-            [i.th.end_event.wait() for i in promises]
-            return resolve([i.th._return for i in promises])
-        except Exception as e:
-            return reject(e)
-    return Promise(f_of_resolve_reject = callback)
+def when(ls_of_callable_or_promise: List[Union[callable, "thennable_thread" ]]):
+    if type(ls_of_callable_or_promise) is list:
+        if all(map( lambda x :  callable(type(x) or 
+                                issubclass(type(x), thennable_thread)),
+                                ls_of_callable_or_promise)) :
+            def callback(resolve: callable, reject: callable):
+                try:
+                    promises = []
+                    resolve_pred = None
+                    for i in ls_of_callable_or_promise:
+                        if not issubclass(type(i), thennable_thread):
+                            i = Promise(i)
+                            i.th.resolve_pred = resolve_pred
+                            resolve_pred = i.th
+                        promises.append(i)
+
+                    [i.th.end_event.wait() for i in promises]
+                    return resolve([i.th._return for i in promises])
+                except Exception as e:
+                    return reject(e)
+            return Promise(f_of_resolve_reject = callback)
+        else:
+            return Promise(f_of_resolve_reject = lambda x,y : x(ls_of_callable_or_promise))
 
 if __name__=="__main__":
     import time
@@ -101,25 +110,30 @@ if __name__=="__main__":
         import random
         a=random.random()
         if  a < 0.5:
-            resolve(str(a) + ' less than 0.5')
+            res = str(a) + ' less than 0.5'
+            print(res)
+            resolve("resolve" +str(a) + ' less than 0.5')
         else:
+            res = "reject" +str(a) + ' more than equal 0.5'
+            print(res)
             reject(str(a) + ' more than equal 0.5')
     def prom_test():
         prom = when([f])
-        prom.th.end_event.wait()
-        print(prom.th.end_event.is_set())
+        prom.th.promise_resolved_event.wait()
+        print(prom.th.promise_resolved_event.is_set())
         print(type(prom))
         
         prom.done(g)
-        dprom = Deferred2(prom_compatible)
+        dprom = Deferred(prom_compatible)
         dprom.fire()
+    prom_test()
     n_d = 4
-    dlist = [Deferred2(prom_compatible) for i in range(n_d)]
+    dlist = [Deferred(prom_compatible) for i in range(n_d)]
     for i in range(n_d):
         #dprom = Deferred2(prom_compatible)
         #print(dprom.th._target)
         dlist[i].fire()
-        
+    for i in range(n_d):
         dlist[i].promise_resolved.wait()
         
         print(dlist[i].resolve_value, dlist[i].reject_reason)
